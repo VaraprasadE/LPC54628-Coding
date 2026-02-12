@@ -1,12 +1,26 @@
+# === GUI Guider Specifics ===
+# These are recreated whenever you "Generate Code" or build
+Data-Structures-On-LPC/generated/
+Data-Structures-On-LPC/temp/
+Data-Structures-On-LPC/import/
+Data-Structures-On-LPC/lvgl-simulator/
 
-.mcuxpressoide_packages_support/
-
+# === MCUXpresso / Eclipse IDE Metadata ===
+# These contain local paths specific to your computer
 .metadata/
+.mcuxpressoide_packages_support/
+**/.settings/
+**/debug/
+**/release/
 
-AzureRTOS_TAD_logs/
+# === Debugger Artifacts ===
+# Logs generated during Task Aware Debugging (TAD)
+*RTOS_TAD_logs/
 
-FreeRTOS_TAD_logs/
-
-ZephyrRTOS_TAD_logs/
-
-LPC54628_Register_Level_Programming/.settings/
+# === Build Artifacts ===
+# Compiled binaries and map files
+*.axf
+*.bin
+*.map
+*.o
+*.d

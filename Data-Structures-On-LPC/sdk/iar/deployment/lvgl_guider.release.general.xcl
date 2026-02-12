@@ -1,0 +1,15 @@
+"%IAR_INSTALL_PATH%\arm\bin\armPROC.dll" 
+
+"%IAR_INSTALL_PATH%\arm\bin\armJET.dll" 
+
+"%IAR_SDK_PATH%\release\lvgl_guider.out" 
+
+--plugin="%IAR_INSTALL_PATH%\arm\bin\armLibSupportUniversal.dll"
+
+--device_macro="%IAR_INSTALL_PATH%\arm\config\debugger\NXP\LPC5460x.dmac" 
+
+--flash_loader="%IAR_INSTALL_PATH%\arm\config\flashloader\NXP\FlashNXPLPC5460xM4F512K.board" 
+
+
+
+

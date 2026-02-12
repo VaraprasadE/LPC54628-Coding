@@ -1,0 +1,20 @@
+{
+  "version": "24.9",
+  "toolchainPath": "C:/NXP/MCUXpressoIDE_11.10.0_3133_prc2/ide/tools",
+  "linkedProjects": [],
+  "trustZoneType": "none",
+  "multicoreType": "none",
+  "debug": {
+    "linkserver": {},
+    "pemicro": {},
+    "segger": {}
+  },
+  "projectType": "sdk-freestanding",
+  "sdk": {
+    "boardId": "lpcxpresso54628",
+    "deviceId": "LPC54628J512",
+    "coreId": "core0_LPC54628J512",
+    "version": "",
+    "path": "c:\\vscode_project\\SDK_2_16_000_LPCXpresso54628"
+  }
+}
