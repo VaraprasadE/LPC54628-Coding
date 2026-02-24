@@ -115,9 +115,9 @@ int main() {
                 GPIO->NOT[2] = (1UL << 2);
                 // Send a message over UART when the button is pressed
                 const char* msg = "Button Pressed!\r\n";
-                for (const char* p = msg; *p != '\0'; p++) {
-                	UART9_SendChar(*p);
-                }
+               for (const char* p = msg; *p != '\0'; p++) {
+                  UART9_SendChar(*p);
+               }
                 last_press_time = current_time;
                 button_ready = false;
             }
