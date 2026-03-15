@@ -1,7 +1,11 @@
 #include "LPC54628.h"
 #include <stdbool.h>
+#include <stdint.h>                // for fixed width types
 
 volatile uint32_t msTicks = 0;
+
+/* accelerometer definitions */
+#define ACCEL_I2C_ADDR 0x1D
 
 // CMSIS standard SysTick Handler
 void SysTick_Handler(void) {
@@ -96,6 +100,109 @@ char UART9_ReceiveChar(void) {
    return (char)(USART9->FIFORD & 0xFF);
 }
 
+/* ---------------------------------------------------------------------------
+   Accelerometer (MMA8652) I2C helpers using Flexcomm2 as master
+   --------------------------------------------------------------------------- */
+
+void Accel_I2C_Init(void) {
+    /* 1. Enable Clocks */
+    // IOCON is at AHBCLKCTRL0[13]
+    SYSCON->AHBCLKCTRLSET[0] = (1UL << 13);          
+    
+    // Flexcomm 2 is at AHBCLKCTRL1[13]
+    SYSCON->AHBCLKCTRLSET[1] = (1UL << 13);          
+
+    /* 2. Select Clock Source for FC2 */
+    // FCLKSEL index matches the Flexcomm number: FC2 = index 2
+    SYSCON->FCLKSEL[2] = 0; /* 0 = FRO 12MHz */
+
+    /* 3. Clear Peripheral Reset */
+    // PRESETCTRL1 index 1, Bit 13 is FC2
+    SYSCON->PRESETCTRLCLR[1] = (1UL << 13);
+
+    /* 4. Configure I2C pins PIO3_23 SDA & PIO3_24 SCL */
+    // port 3, pin 23/24
+    // FUNC 1 = I2C, DIGIMODE = 1 (Bit 8). 
+    // Note: I2C pins on P3 often need the I2CSLEW/FILTER bits in 11:10
+    IOCON->PIO[3][23] = (1 << 0) | (1 << 8) | (1 << 11); // SDA
+    IOCON->PIO[3][24] = (1 << 0) | (1 << 8) | (1 << 11); // SCL
+
+    /* 5. Select I2C function in Flexcomm block */
+    FLEXCOMM2->PSELID = 3;
+
+    /* 6. Configure I2C clock rate (~400kHz) */
+    // 12MHz / (2 * 15) = 400kHz roughly. Adjust CLKDIV based on MSTTIME.
+    I2C2->CLKDIV = 2;                         
+    I2C2->MSTTIME = (3 << 4) | (3 << 0); // SCL High/Low time      
+
+    /* 7. Enable master mode */
+    I2C2->CFG = (1 << 0);
+}
+
+void Accel_WriteRegister(uint8_t reg_addr, uint8_t data) {
+    /* idle */
+    while (!(I2C2->STAT & (1 << 0))); 
+
+    /* start + write bit */
+    I2C2->MSTDAT = (ACCEL_I2C_ADDR << 1) | 0;
+    I2C2->MSTCTL = (1 << 1); /* MSTSTART */
+
+    /* send reg address */
+    while (!(I2C2->STAT & (1 << 0)));
+    // Safety check: if NACK received, abort and send stop
+    if (((I2C2->STAT >> 1) & 0x7) == 0x3) { I2C2->MSTCTL = (1 << 2); return; }
+
+    I2C2->MSTDAT = reg_addr;
+    I2C2->MSTCTL = (1 << 0); /* continue */
+
+    /* send data */
+    while (!(I2C2->STAT & (1 << 0)));
+    I2C2->MSTDAT = data;
+    I2C2->MSTCTL = (1 << 0);
+
+    /* stop */
+    while (!(I2C2->STAT & (1 << 0)));
+    I2C2->MSTCTL = (1 << 2);
+    
+    /* wait for stop to complete */
+    while (!(I2C2->STAT & (1 << 0)));
+}
+
+uint8_t Accel_ReadRegister(uint8_t reg_addr) {
+    uint8_t val = 0;
+    
+    /* wait for idle */
+    while (!(I2C2->STAT & (1 << 0)));
+
+    /* send start + write address */
+    I2C2->MSTDAT = (ACCEL_I2C_ADDR << 1) | 0;
+    I2C2->MSTCTL = (1 << 1);
+    
+    while (!(I2C2->STAT & (1 << 0)));
+    // Safety check: if NACK received, abort and send stop
+    if (((I2C2->STAT >> 1) & 0x7) == 0x3) { I2C2->MSTCTL = (1 << 2); return 0; }
+
+    /* send register address */
+    I2C2->MSTDAT = reg_addr;
+    I2C2->MSTCTL = (1 << 0);
+
+    /* repeated start + read address */
+    while (!(I2C2->STAT & (1 << 0)));
+    I2C2->MSTDAT = (ACCEL_I2C_ADDR << 1) | 1;
+    I2C2->MSTCTL = (1 << 1);
+
+    /* wait for data to be received */
+    while (!(I2C2->STAT & (1 << 0)));
+    val = (uint8_t)(I2C2->MSTDAT & 0xFF);
+
+    /* send NACK + STOP */
+    // MSTCTL Bit 2 is Stop, Bit 3 is NACK
+    I2C2->MSTCTL = (1 << 2) | (1 << 3); 
+    while (!(I2C2->STAT & (1 << 0)));
+
+    return val;
+}
+
 int main() {
     char rx_byte = 0; // Initialize to avoid junk logic
     uint32_t last_press_time = 0;
@@ -106,6 +213,19 @@ int main() {
     UserButton_Init();
     UART9_Init(9600);
     SysTick_Config(SystemCoreClock / 1000);
+
+    /* accelerometer check */
+    Accel_I2C_Init();
+    uint8_t who = Accel_ReadRegister(0x0D);
+    if (who == 0x4A) {
+        /* device responding, activate sensor */
+        Accel_WriteRegister(0x2A, 0x01); /* CTRL_REG1 = ACTIVE */
+        const char *msg = "Accel OK\r\n";
+        for (const char *p = msg; *p; p++) UART9_SendChar(*p);
+    } else {
+        const char *msg = "Accel FAIL\r\n";
+        for (const char *p = msg; *p; p++) UART9_SendChar(*p);
+    }
 
     while (1) {
         /* 1. BUTTON LOGIC (Now checked constantly) */
