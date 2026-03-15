@@ -24,3 +24,4 @@ Data-Structures-On-LPC/lvgl-simulator/
 *.map
 *.o
 *.d
+Analyzer/
