@@ -1,61 +1,60 @@
 #include "LPC54628.h"
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdint.h>                // for fixed width types
 
-volatile uint32_t msTicks = 0;
-
 /* accelerometer definitions */
-#define ACCEL_I2C_ADDR 0x1D
+#define ACCEL_I2C_ADDR           0x1DU
+#define ACCEL_REG_OUT_X_MSB      0x01U
+#define ACCEL_REG_WHO_AM_I       0x0DU
+#define ACCEL_REG_XYZ_DATA_CFG   0x0EU
+#define ACCEL_REG_CTRL_REG1      0x2AU
+#define ACCEL_WHO_AM_I_VALUE     0x4AU
 
-// CMSIS standard SysTick Handler
-void SysTick_Handler(void) {
-   msTicks++;
+void UART0_Init(uint32_t baudrate) {
+    /* STEP 1: Enable Peripheral Clocks */
+    SYSCON->AHBCLKCTRLSET[0] = SYSCON_AHBCLKCTRL_IOCON_MASK;
+    SYSCON->AHBCLKCTRLSET[1] = SYSCON_AHBCLKCTRL_FLEXCOMM0_MASK;
+
+    /* STEP 2: Select Functional Clock Source (Index [0] for FC0) */
+    SYSCON->FCLKSEL[0] = 0; // 0 = FRO 12MHz
+
+    /* STEP 3: Release Peripheral from Reset (Index [1] for FC0) */
+    SYSCON->PRESETCTRLCLR[1] = SYSCON_PRESETCTRL_FC0_RST_MASK;
+
+    /* STEP 4: Configure Pin Multiplexing (IOCON) */
+    // PIO0_29 = RX, PIO0_30 = TX
+    IOCON->PIO[0][29] = (1 << 0) | (1 << 8);
+    IOCON->PIO[0][30] = (1 << 0) | (1 << 8);
+
+    /* STEP 5: Select Flexcomm Function (1 = USART) */
+    FLEXCOMM0->PSELID = 1;
+
+    /* STEP 6: Enable the USART */
+    USART0->CFG = USART_CFG_ENABLE_MASK | USART_CFG_DATALEN(1);
+
+    /* STEP 7: Configure Baud Rate */
+    USART0->BRG = (12000000 / (16 * baudrate)) - 1;
+
+    /* STEP 8: Configure and Enable FIFOs */
+    USART0->FIFOCFG |= (USART_FIFOCFG_ENABLETX_MASK | USART_FIFOCFG_ENABLERX_MASK);
 }
 
-void UserButton_Init(void) {
-    /* 1. Enable Clocks (Index [0] for both IOCON and GPIO1) */
-    // Bit 13: IOCON, Bit 15: GPIO1
-    SYSCON->AHBCLKCTRLSET[0] = (1UL << 13) | (1UL << 15);
-
-    /* 2. Clear Peripheral Reset for GPIO Port 1 (Index [0]) */
-    SYSCON->PRESETCTRLCLR[0] = (1UL << 15);
-
-    /* 3. Configure IOCON for PIO1_1 */
-    // PIO array is [Port][Pin]
-    // FUNC = 0, MODE = 2 (Pull-up), DIGIMODE = 1 (Bit 8)
-    IOCON->PIO[1][1] = (0x0 << 0) | (0x2 << 4) | (1 << 8);
-
-    /* 4. Set GPIO Direction to Input */
-    // Port 1, Pin 1. Writing 0 to DIR sets it as input.
-    GPIO->DIR[1] &= ~(1UL << 1);
+void UART0_SendChar(char c) {
+    while (!(USART0->FIFOSTAT & USART_FIFOSTAT_TXNOTFULL_MASK));
+    USART0->FIFOWR = (uint32_t)c;
 }
 
-bool UserButton_IsPressed(void) {
-    /* Read from PIN register for Port 1.
-       SW5 is Active-Low: 0 = Pressed, 1 = Released */
-    return ((GPIO->PIN[1] & (1UL << 1)) == 0);
+char UART0_ReceiveChar(void) {
+    while (!(USART0->FIFOSTAT & USART_FIFOSTAT_RXNOTEMPTY_MASK));
+    return (char)(USART0->FIFORD & 0xFF);
 }
 
-void LED_Init(void) {
-   /* 1. Enable Clocks for GPIO2 and GPIO3 - Index [0] */
-   SYSCON->AHBCLKCTRLSET[0] = (1UL << 16) | (1UL << 17);
-
-   /* 2. Clear Peripheral Resets for GPIO2 and GPIO3 - Index [0] */
-   SYSCON->PRESETCTRLCLR[0] = (1UL << 16) | (1UL << 17);
-
-   /* 3. Configure Pin Multiplexing (IOCON) */
-   /* PIO is a 2D array [Port][Pin] */
-   IOCON->PIO[2][2]  = (0x0 << 0) | (1 << 7); // Green LED
-   IOCON->PIO[3][3]  = (0x0 << 0) | (1 << 8); // Red LED
-   IOCON->PIO[3][14] = (0x0 << 0) | (1 << 8); // Blue LED
-
-   /* 4. Set Direction to Output */
-   GPIO->DIR[2] |= (1UL << 2);
-   GPIO->DIR[3] |= (1UL << 3) | (1UL << 14);
-
-   /* 5. Start with LEDs OFF (Assuming Active Low) */
-   GPIO->SET[2] = (1UL << 2);
-   GPIO->SET[3] = (1UL << 3) | (1UL << 14);
+void UART0_SendString(const char *message) {
+    while (*message != '\0') {
+        UART0_SendChar(*message);
+        message++;
+    }
 }
 
 void UART9_Init(uint32_t baudrate) {
@@ -100,6 +99,32 @@ char UART9_ReceiveChar(void) {
    return (char)(USART9->FIFORD & 0xFF);
 }
 
+void UART9_SendString(const char *message) {
+    while (*message != '\0') {
+        UART9_SendChar(*message);
+        message++;
+    }
+}
+
+void UART_BroadcastString(const char *message) {
+    UART0_SendString(message);
+    UART9_SendString(message);
+}
+
+static void UART0_SendPrompt(void) {
+    UART0_SendString("> ");
+}
+
+static void UART_BroadcastCommand(char command_byte) {
+    UART0_SendString("CMD: ");
+    UART0_SendChar(command_byte);
+    UART0_SendString("\r\n");
+
+    UART9_SendString("CMD: ");
+    UART9_SendChar(command_byte);
+    UART9_SendString("\r\n");
+}
+
 /* ---------------------------------------------------------------------------
    Accelerometer (MMA8652) I2C helpers using Flexcomm2 as master
    --------------------------------------------------------------------------- */
@@ -139,139 +164,209 @@ void Accel_I2C_Init(void) {
     I2C2->CFG = (1 << 0);
 }
 
-void Accel_WriteRegister(uint8_t reg_addr, uint8_t data) {
-    /* idle */
-    while (!(I2C2->STAT & (1 << 0))); 
+static uint32_t Accel_I2C_WaitPending(void) {
+    while ((I2C2->STAT & I2C_STAT_MSTPENDING_MASK) == 0U) {
+    }
 
-    /* start + write bit */
-    I2C2->MSTDAT = (ACCEL_I2C_ADDR << 1) | 0;
-    I2C2->MSTCTL = (1 << 1); /* MSTSTART */
+    return (I2C2->STAT & I2C_STAT_MSTSTATE_MASK);
+}
 
-    /* send reg address */
-    while (!(I2C2->STAT & (1 << 0)));
-    // Safety check: if NACK received, abort and send stop
-    if (((I2C2->STAT >> 1) & 0x7) == 0x3) { I2C2->MSTCTL = (1 << 2); return; }
+static void Accel_I2C_Stop(void) {
+    I2C2->MSTCTL = I2C_MSTCTL_MSTSTOP_MASK;
+    (void)Accel_I2C_WaitPending();
+}
+
+bool Accel_WriteRegister(uint8_t reg_addr, uint8_t data) {
+    uint32_t state;
+
+    /* wait for idle */
+    (void)Accel_I2C_WaitPending();
+
+    I2C2->MSTDAT = (ACCEL_I2C_ADDR << 1) | 0U;
+    I2C2->MSTCTL = I2C_MSTCTL_MSTSTART_MASK;
+
+    state = Accel_I2C_WaitPending();
+    if (state != I2C_STAT_MSTSTATE(0x2)) {
+        Accel_I2C_Stop();
+        return false;
+    }
 
     I2C2->MSTDAT = reg_addr;
-    I2C2->MSTCTL = (1 << 0); /* continue */
+    I2C2->MSTCTL = I2C_MSTCTL_MSTCONTINUE_MASK;
 
-    /* send data */
-    while (!(I2C2->STAT & (1 << 0)));
+    state = Accel_I2C_WaitPending();
+    if (state != I2C_STAT_MSTSTATE(0x2)) {
+        Accel_I2C_Stop();
+        return false;
+    }
+
     I2C2->MSTDAT = data;
-    I2C2->MSTCTL = (1 << 0);
+    I2C2->MSTCTL = I2C_MSTCTL_MSTCONTINUE_MASK;
 
-    /* stop */
-    while (!(I2C2->STAT & (1 << 0)));
-    I2C2->MSTCTL = (1 << 2);
-    
-    /* wait for stop to complete */
-    while (!(I2C2->STAT & (1 << 0)));
+    state = Accel_I2C_WaitPending();
+    if (state != I2C_STAT_MSTSTATE(0x2)) {
+        Accel_I2C_Stop();
+        return false;
+    }
+
+    Accel_I2C_Stop();
+    return true;
+}
+
+bool Accel_ReadRegisters(uint8_t start_reg, uint8_t *data, uint32_t length) {
+    uint32_t index;
+    uint32_t state;
+
+    if ((data == 0) || (length == 0U)) {
+        return false;
+    }
+
+    /* wait for idle */
+    (void)Accel_I2C_WaitPending();
+
+    I2C2->MSTDAT = (ACCEL_I2C_ADDR << 1) | 0U;
+    I2C2->MSTCTL = I2C_MSTCTL_MSTSTART_MASK;
+
+    state = Accel_I2C_WaitPending();
+    if (state != I2C_STAT_MSTSTATE(0x2)) {
+        Accel_I2C_Stop();
+        return false;
+    }
+
+    I2C2->MSTDAT = start_reg;
+    I2C2->MSTCTL = I2C_MSTCTL_MSTCONTINUE_MASK;
+
+    state = Accel_I2C_WaitPending();
+    if (state != I2C_STAT_MSTSTATE(0x2)) {
+        Accel_I2C_Stop();
+        return false;
+    }
+
+    I2C2->MSTDAT = (ACCEL_I2C_ADDR << 1) | 1U;
+    I2C2->MSTCTL = I2C_MSTCTL_MSTSTART_MASK;
+
+    for (index = 0; index < length; index++) {
+        state = Accel_I2C_WaitPending();
+        if (state != I2C_STAT_MSTSTATE(0x1)) {
+            Accel_I2C_Stop();
+            return false;
+        }
+
+        data[index] = (uint8_t)(I2C2->MSTDAT & I2C_MSTDAT_DATA_MASK);
+
+        if (index + 1U < length) {
+            I2C2->MSTCTL = I2C_MSTCTL_MSTCONTINUE_MASK;
+        } else {
+            I2C2->MSTCTL = I2C_MSTCTL_MSTSTOP_MASK;
+        }
+    }
+
+    (void)Accel_I2C_WaitPending();
+    return true;
 }
 
 uint8_t Accel_ReadRegister(uint8_t reg_addr) {
-    uint8_t val = 0;
-    
-    /* wait for idle */
-    while (!(I2C2->STAT & (1 << 0)));
+    uint8_t value = 0;
 
-    /* send start + write address */
-    I2C2->MSTDAT = (ACCEL_I2C_ADDR << 1) | 0;
-    I2C2->MSTCTL = (1 << 1);
-    
-    while (!(I2C2->STAT & (1 << 0)));
-    // Safety check: if NACK received, abort and send stop
-    if (((I2C2->STAT >> 1) & 0x7) == 0x3) { I2C2->MSTCTL = (1 << 2); return 0; }
+    if (!Accel_ReadRegisters(reg_addr, &value, 1U)) {
+        return 0;
+    }
 
-    /* send register address */
-    I2C2->MSTDAT = reg_addr;
-    I2C2->MSTCTL = (1 << 0);
+    return value;
+}
 
-    /* repeated start + read address */
-    while (!(I2C2->STAT & (1 << 0)));
-    I2C2->MSTDAT = (ACCEL_I2C_ADDR << 1) | 1;
-    I2C2->MSTCTL = (1 << 1);
+bool Accel_ReadAxes(int16_t *x_axis, int16_t *y_axis, int16_t *z_axis) {
+    uint8_t raw_data[6];
 
-    /* wait for data to be received */
-    while (!(I2C2->STAT & (1 << 0)));
-    val = (uint8_t)(I2C2->MSTDAT & 0xFF);
+    if ((x_axis == 0) || (y_axis == 0) || (z_axis == 0)) {
+        return false;
+    }
 
-    /* send NACK + STOP */
-    // MSTCTL Bit 2 is Stop, Bit 3 is NACK
-    I2C2->MSTCTL = (1 << 2) | (1 << 3); 
-    while (!(I2C2->STAT & (1 << 0)));
+    if (!Accel_ReadRegisters(ACCEL_REG_OUT_X_MSB, raw_data, 6U)) {
+        return false;
+    }
 
-    return val;
+    *x_axis = (int16_t)((((uint16_t)raw_data[0]) << 8) | raw_data[1]) >> 4;
+    *y_axis = (int16_t)((((uint16_t)raw_data[2]) << 8) | raw_data[3]) >> 4;
+    *z_axis = (int16_t)((((uint16_t)raw_data[4]) << 8) | raw_data[5]) >> 4;
+
+    return true;
+}
+
+bool Accel_DeviceInit(void) {
+    uint8_t who_am_i = Accel_ReadRegister(ACCEL_REG_WHO_AM_I);
+
+    if (who_am_i != ACCEL_WHO_AM_I_VALUE) {
+        return false;
+    }
+
+    if (!Accel_WriteRegister(ACCEL_REG_CTRL_REG1, 0x00U)) {
+        return false;
+    }
+
+    if (!Accel_WriteRegister(ACCEL_REG_XYZ_DATA_CFG, 0x00U)) {
+        return false;
+    }
+
+    return Accel_WriteRegister(ACCEL_REG_CTRL_REG1, 0x01U);
 }
 
 int main() {
-    char rx_byte = 0; // Initialize to avoid junk logic
-    uint32_t last_press_time = 0;
-    uint32_t last_dot_time = 0; // NEW: To track heartbeat timing
-    bool button_ready = true;
+    bool accel_ready;
+    char rx_byte;
+    char message[96];
+    int16_t accel_x;
+    int16_t accel_y;
+    int16_t accel_z;
 
-    LED_Init();
-    UserButton_Init();
+    UART0_Init(9600);
     UART9_Init(9600);
-    SysTick_Config(SystemCoreClock / 1000);
 
-    /* accelerometer check */
     Accel_I2C_Init();
-    uint8_t who = Accel_ReadRegister(0x0D);
-    if (who == 0x4A) {
-        /* device responding, activate sensor */
-        Accel_WriteRegister(0x2A, 0x01); /* CTRL_REG1 = ACTIVE */
-        const char *msg = "Accel OK\r\n";
-        for (const char *p = msg; *p; p++) UART9_SendChar(*p);
+    accel_ready = Accel_DeviceInit();
+
+    UART_BroadcastString("UART0 command interface ready. Send 'a' to read accelerometer.\r\n");
+    if (accel_ready) {
+        UART_BroadcastString("Accelerometer detected on I2C.\r\n");
     } else {
-        const char *msg = "Accel FAIL\r\n";
-        for (const char *p = msg; *p; p++) UART9_SendChar(*p);
+        UART_BroadcastString("Accelerometer init failed.\r\n");
     }
+    UART0_SendPrompt();
 
     while (1) {
-        /* 1. BUTTON LOGIC (Now checked constantly) */
-        if (UserButton_IsPressed()) {
-            uint32_t current_time = msTicks;
-            if (button_ready && (current_time - last_press_time) > 200) {
-                GPIO->NOT[2] = (1UL << 2);
-                // Send a message over UART when the button is pressed
-                const char* msg = "Button Pressed!\r\n";
-                for (const char* p = msg; *p != '\0'; p++) {
-                	UART9_SendChar(*p);
+        if (USART0->FIFOSTAT & USART_FIFOSTAT_RXNOTEMPTY_MASK) {
+            rx_byte = UART0_ReceiveChar();
+
+            if ((rx_byte == '\r') || (rx_byte == '\n')) {
+                continue;
+            }
+
+            UART_BroadcastCommand(rx_byte);
+
+            if ((rx_byte == 'a') || (rx_byte == 'A')) {
+                if (!accel_ready) {
+                    accel_ready = Accel_DeviceInit();
                 }
-                last_press_time = current_time;
-                button_ready = false;
+
+                if (accel_ready && Accel_ReadAxes(&accel_x, &accel_y, &accel_z)) {
+                    (void)snprintf(message,
+                                   sizeof(message),
+                                   "ACCEL X=%d Y=%d Z=%d\r\n",
+                                   accel_x,
+                                   accel_y,
+                                   accel_z);
+                    UART_BroadcastString(message);
+                } else {
+                    UART_BroadcastString("ACCEL READ FAILED\r\n");
+                }
+            } else if ((rx_byte == '?') || (rx_byte == 'h') || (rx_byte == 'H')) {
+                UART_BroadcastString("Commands: a=read accel, h/?=help\r\n");
+            } else {
+                (void)snprintf(message, sizeof(message), "Unknown command '%c'\r\n", rx_byte);
+                UART_BroadcastString(message);
             }
-        } else {
-            button_ready = true;
+
+            UART0_SendPrompt();
         }
-
-        /* 2. UART RECEIVE (Now checked constantly) */
-        if (USART9->FIFOSTAT & USART_FIFOSTAT_RXNOTEMPTY_MASK) {
-            rx_byte = UART9_ReceiveChar();
-            UART9_SendChar(rx_byte);
-
-            // Move COMMAND LOGIC inside this IF so it only runs on NEW data
-            if (rx_byte == 'r' || rx_byte == 'R') {
-                GPIO->NOT[2] = (1UL << 2);
-            }
-            else if (rx_byte == 'g' || rx_byte == 'G') {
-                GPIO->NOT[3] = (1UL << 3);
-            }
-            else if (rx_byte == 'b' || rx_byte == 'B') {
-                GPIO->NOT[3] = (1UL << 14);
-            }
-        }
-
-        /* 3. NON-BLOCKING HEARTBEAT (The secret sauce) */
-        // Check if 1000ms have passed since the last dot
-        if ((msTicks - last_dot_time) >= 1000) {
-            UART9_SendChar('.');
-            last_dot_time = msTicks; // Reset timer for next dot
-        }
-
-        // NO DELAY_MS(1000) HERE!
-        // The loop now spins at full speed.
     }
 }
-
-

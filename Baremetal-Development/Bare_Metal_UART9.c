@@ -1,5 +1,4 @@
 #include "LPC54628.h"
-#include <stdbool.h>
 
 volatile uint32_t msTicks = 0;
 
@@ -85,29 +84,26 @@ int main() {
    UART9_Init(9600);
 
    SysTick_Config(SystemCoreClock / 1000);
+   rx_byte = '\0';
 
    while (1) {
-       /* BLOCKING RECEIVE: Wait for a character to arrive */
        if (USART9->FIFOSTAT & USART_FIFOSTAT_RXNOTEMPTY_MASK) {
             rx_byte = UART9_ReceiveChar();
             /* ECHO: Send it back so you see it on your Saleae/Terminal */
             UART9_SendChar(rx_byte);
-        }
 
-       /* COMMAND LOGIC */
-       if (rx_byte == 'r' || rx_byte == 'R') {
-           GPIO->NOT[2] = (1UL << 2);    // Toggle Green
-       }
-       else if (rx_byte == 'g' || rx_byte == 'G') {
-           GPIO->NOT[3] = (1UL << 3);    // Toggle Red
-       }
-       else if (rx_byte == 'b' || rx_byte == 'B') {
-           GPIO->NOT[3] = (1UL << 14);
+         if (rx_byte == 'r' || rx_byte == 'R') {
+            GPIO->NOT[2] = (1UL << 2);    // Toggle Green
+         }
+         else if (rx_byte == 'g' || rx_byte == 'G') {
+            GPIO->NOT[3] = (1UL << 3);    // Toggle Red
+         }
+         else if (rx_byte == 'b' || rx_byte == 'B') {
+            GPIO->NOT[3] = (1UL << 14);
+         }
        }
 
        UART9_SendChar('.'); // Send a dot every second to show the board is alive
        delay_ms(1000);
    }
 }
-
-
